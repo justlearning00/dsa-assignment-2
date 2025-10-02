@@ -86,7 +86,7 @@ service /admin on new http:Listener(8086) {
     resource function post disruptions(http:Caller caller, http:Request req) returns error? {
         json body = check req.getJsonPayload();
         io:println("Service disruption published (mocked): ", body.toJsonString());
-        // Kafka: check kafkaProducer->send({topic: "notifications", value: body});
+        // Kafka: check kafkaProducer->send({topic: "service_disruption", value: body});
         // DB: check mongoClient->insert("disruptions", body);
         check caller->respond({status: "Disruption published (mocked)"});
     }
