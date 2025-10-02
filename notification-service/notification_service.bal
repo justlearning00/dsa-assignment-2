@@ -1,55 +1,66 @@
 import ballerina/http;
 import ballerina/io;
+import ballerinax/mongodb;
 
-// -----------------------------
-// Mock Data (replace with DB later)
-// -----------------------------
-type Notification record {
-    int id;
-    int userId;
-    string message;
-    boolean read;
-};
+mongodb:Client mongoClient = check new ({
+    connection: "mongodb://root:password@localhost:27017/transport_db"});
 
-Notification[] notifications = [
-    {id: 1, userId: 101, message: "Your ticket has been validated", read: false},
-    {id: 2, userId: 101, message: "Train 5 delayed by 10 minutes", read: false},
-    {id: 3, userId: 102, message: "Your monthly pass is expiring soon", read: true},
-    {id: 4, userId: 103, message: "Bus route 12 cancelled", read: false}
-];
+// Placeholder for Kafka Consumer
+// kafka:Consumer kafkaConsumer = check new (...);
 
-// -----------------------------
-// REST API
-// -----------------------------
-service /notification on new http:Listener(8085) {
+service /notifications on new http:Listener(8085) {
 
-    // Fetch notifications for a specific user
-    resource function get user/[int userId](http:Caller caller, http:Request req) returns error? {
-        Notification[] userNotifications = [];
-        foreach var n in notifications {
-            if n.userId == userId {
-                userNotifications.push(n);
-            }
-        }
-        io:println("Fetched notifications for user: ", userId.toString());
-        check caller->respond(userNotifications);
-    }
-
-    // Send a new notification (mock/test)
+    
+    // Send a notification 
+   
     resource function post send(http:Caller caller, http:Request req) returns error? {
         json body = check req.getJsonPayload();
-        io:println("New notification received: ", body.toJsonString());
+        io:println("Notification sent (mocked): ", body.toJsonString());
+        // Kafka: publish notification
+        // check kafkaProducer->send({topic: "notifications", value: body});
+  
+        // DB: insert into notifications collection
+        // check mongoClient->insert("notifications", body);
+       
 
-        // -----------------------------
-        // Placeholder: insert into DB here
-        // Example: await dbClient->insert("notifications", body);
-        // -----------------------------
+        check caller->respond({status: "Notification stored (mocked)"});
+    }
 
-        // -----------------------------
-        // Placeholder: publish to Kafka topic here
-        // Example: kafkaProducer->publish("notifications", body);
-        // -----------------------------
+    
+    // Get all notifications 
+    
+    resource function get all(http:Caller caller, http:Request req) returns error? {
+        io:println("Fetching all notifications (mocked)");
 
-        check caller->respond({status: "Notification sent (mocked)"});
+       
+        // DB: query notifications collection
+        // json[] notifications = await mongoClient->find("notifications", {});
+        json payload = [];
+    check caller->respond(payload);
+    }
+
+    //  Get notifications for a specific user
+   
+    resource function get user/[string userId](http:Caller caller, http:Request req) returns error? {
+        io:println("Fetching notifications for user: ", userId);
+
+        
+        // DB: query notifications collection with userId filter
+        // json[] notifications = await mongoClient->find("notifications", {userId: userId});
+    json payload = [];
+    check caller->respond(payload);
+        
+    }
+
+    
+    //  Mark notification as read
+    
+    resource function put user/[string userId]/[string notificationId]/read(http:Caller caller, http:Request req) returns error? {
+        io:println("Marking notification ", notificationId, " as read for user ", userId);
+
+        
+        // DB: update notification document
+        // check mongoClient->updateById("notifications", notificationId, {read: true})
+        check caller->respond({status: "Notification marked as read (mocked)"});
     }
 }
