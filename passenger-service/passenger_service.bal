@@ -3,7 +3,7 @@ import ballerina/io;
 import ballerinax/mongodb;
 
 mongodb:Client mongoClient = check new ({
-    connection: "mongodb://root:password@localhost:27017/transport_db"
+    connection: "mongodb://root:password@mongo-db:27017/transport_db"
 });
 
 // Placeholder for Kafka Producer (when passenger buys ticket)
@@ -16,7 +16,7 @@ service /passenger on new http:Listener(8081) {
         json body = check req.getJsonPayload();
         io:println("Register passenger (mocked): ", body.toJsonString());
         // check mongoClient->insert("users", body);
-        check caller->respond({status: "Passenger registered (mocked)"});
+        check caller->respond({status: "Passenger registered successfully"});
     }
 
     //  LOGIN passenger

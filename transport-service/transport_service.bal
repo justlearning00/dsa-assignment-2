@@ -3,13 +3,13 @@ import ballerina/io;
 import ballerinax/mongodb;
 
 mongodb:Client mongoClient = check new ({
-    connection: "mongodb://root:password@localhost:27017/transport_db"
+    connection: "mongodb://root:password@mongo-db:27017/transport_db"
 });
 
 // Placeholder for Kafka Producer (for schedule updates)
 // kafka:Producer kafkaProducer = check new (...);
 
-service /transport on new http:Listener(8082) {
+service /transport on new http:Listener(8085) {
 
     //  CREATE ROUTE
     resource function post routes(http:Caller caller, http:Request req) returns error? {

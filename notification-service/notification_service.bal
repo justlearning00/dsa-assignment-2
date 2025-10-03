@@ -8,7 +8,7 @@ mongodb:Client mongoClient = check new ({
 // Placeholder for Kafka Consumer
 // kafka:Consumer kafkaConsumer = check new (...);
 
-service /notifications on new http:Listener(8085) {
+service /notifications on new http:Listener(8083) {
 
     
     // Send a notification 
