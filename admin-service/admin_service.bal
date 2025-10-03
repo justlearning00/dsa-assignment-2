@@ -1,14 +1,13 @@
 import ballerina/http;
 import ballerina/io;
 import ballerinax/mongodb;
+import ballerinax/kafka;
 
 mongodb:Client mongoClient = check new ({
     connection: "mongodb://root:password@localhost:27017/transport_db"});
 
 // 
-
-// Placeholder for Kafka Producer
-// kafka:Producer kafkaProducer = check new (...);
+kafka:Producer kafkaProducer = check new ("localhost:9092");
 
 service /admin on new http:Listener(8086) {
 

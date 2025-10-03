@@ -1,12 +1,13 @@
 import ballerina/http;
 import ballerina/io;
 import ballerinax/mongodb;
+import ballerinax/kafka;
 
 mongodb:Client mongoClient = check new ({
     connection: "mongodb://root:password@localhost:27017/transport_db"});
 
 // Placeholder for Kafka Consumer
-// kafka:Consumer kafkaConsumer = check new (...);
+ kafka:Consumer consumer = check new ("kafka1:19092");
 
 service /notifications on new http:Listener(8083) {
 
