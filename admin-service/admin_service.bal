@@ -47,14 +47,13 @@ service /admin on new http:Listener(8086) {
         self.reportsCollection = check self.transportDb->getCollection("reports");
 
         // Initialize Kafka producer
-        self.kafkaProducer = check new ("localhost:9092");
+        self.kafkaProducer = check new (kafka:DEFAULT_URL);
 
         log:printInfo("Admin Service initialized successfully");
     }
 
-    // ==============================
     // ROUTE MANAGEMENT
-    // ==============================
+
     isolated resource function post routes(http:Caller caller, http:Request req) returns error? {
         log:printInfo("POST /admin/routes - Creating route");
         json payload = check req.getJsonPayload();
@@ -122,9 +121,9 @@ service /admin on new http:Listener(8086) {
         check caller->respond({status: "Route deleted", deletedCount: result.deletedCount});
     }
 
-    // ==============================
+    
     // TRIP MANAGEMENT
-    // ==============================
+    
     isolated resource function post trips(http:Caller caller, http:Request req) returns error? {
         log:printInfo("POST /admin/trips - Creating trip");
         json payload = check req.getJsonPayload();
@@ -212,9 +211,9 @@ service /admin on new http:Listener(8086) {
         });
     }
 
-    // ==============================
+    
     // SERVICE DISRUPTIONS
-    // ==============================
+   
     isolated resource function post disruptions(http:Caller caller, http:Request req) returns error? {
         log:printInfo("POST /admin/disruptions - Creating disruption");
         json payload = check req.getJsonPayload();
@@ -238,10 +237,9 @@ service /admin on new http:Listener(8086) {
         check caller->respond({status: "Disruption published", id: disruptionId});
     }
 
-    // ==============================
+    
     // REPORTS
-    // ==============================
-    isolated resource function get reports(http:Caller caller, http:Request req) returns error? {
+        isolated resource function get reports(http:Caller caller, http:Request req) returns error? {
         log:printInfo("GET /admin/reports - Fetching reports");
         stream<map<json>, error?> resultStream = check self.reportsCollection->find();
         map<json>[] reports = check from map<json> report in resultStream select report;
