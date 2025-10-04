@@ -17,6 +17,13 @@ kafka-topics --create --topic notifications --partitions 3 --replication-factor 
 kafka-topics --create --topic service.disruptions --partitions 3 --replication-factor 1 --bootstrap-server localhost:9092
 
 
+kafka-topics --create --topic payment.requests --partitions 3 --replication-factor 1 --bootstrap-server localhost:9092
+kafka-topics --create --topic ticket.validated --partitions 3 --replication-factor 1 --bootstrap-server localhost:9092
+kafka-topics --create --topic ticket.purchased --partitions 3 --replication-factor 1 --bootstrap-server localhost:9092
+
+
+
+
 # 2nd terminal to listen to ticket.requests
 
 docker exec -it kafka1 kafka-console-consumer --topic ticket.requests --from-beginning --bootstrap-server localhost:9092
