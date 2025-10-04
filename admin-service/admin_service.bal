@@ -1,102 +1,252 @@
 import ballerina/http;
-import ballerina/io;
+import ballerina/log;
 import ballerinax/mongodb;
 import ballerinax/kafka;
+import ballerina/time;
 
-mongodb:Client mongoClient = check new ({
-    connection: "mongodb://root:password@localhost:27017/transport_db"});
+type ScheduleUpdate record {
+    string eventType;
+    string resourceId;
+    json data;
+    time:Utc timestamp;
+};
 
-// 
-kafka:Producer kafkaProducer = check new ("localhost:9092");
+type ServiceDisruption record {
+    string disruptionId;
+    string routeId;
+    string severity;
+    string description;
+    time:Utc timestamp;
+};
 
 service /admin on new http:Listener(8086) {
-
-    
-    // ROUTE MANAGEMENT
-    
-    resource function post routes(http:Caller caller, http:Request req) returns error? {
-        json body = check req.getJsonPayload();
-        io:println("Create route (mocked): ", body.toJsonString());
-        // check mongoClient->insert("routes", body);
-        check caller->respond({status: "Route created (mocked)"});
-    }
-
-    resource function get routes(http:Caller caller, http:Request req) returns error? {
-        io:println("Fetch all routes (mocked)");
-       // json[] routes = await mongoClient->find("routes", {});
-    json payload = [];
-    check caller->respond(payload);
-    }
-
-    resource function put routes/[string routeId](http:Caller caller, http:Request req) returns error? {
-        json body = check req.getJsonPayload();
-        io:println("Update route ", routeId, " (mocked): ", body.toJsonString());
-        // check mongoClient->updateById("routes", routeId, body);
-        check caller->respond({status: "Route updated (mocked)"});
-    }
-
-    resource function delete routes/[string routeId](http:Caller caller, http:Request req) returns error? {
-        io:println("Delete route ", routeId, " (mocked)");
-        // check mongoClient->deleteById("routes", routeId);
-        check caller->respond({status: "Route deleted (mocked)"});
-    }
-
-    // TRIP MANAGEMENT
-    
-    resource function post trips(http:Caller caller, http:Request req) returns error? {
-        json body = check req.getJsonPayload();
-        io:println("Create trip (mocked): ", body.toJsonString());
-        // check mongoClient->insert("trips", body);
-        check caller->respond({status: "Trip created (mocked)"});
-    }
-
-    resource function get trips(http:Caller caller, http:Request req) returns error? {
-        io:println("Fetch all trips (mocked)");
-        // json[] trips = await mongoClient->find("trips", {});
-        json payload = [];
-    check caller->respond(payload);
-        
-    }
-
-    resource function put trips/[string tripId](http:Caller caller, http:Request req) returns error? {
-        json body = check req.getJsonPayload();
-        io:println("Update trip ", tripId, " (mocked): ", body.toJsonString());
-        // check mongoClient->updateById("trips", tripId, body);
-        check caller->respond({status: "Trip updated (mocked)"});
-    }
-
-    resource function delete trips/[string tripId](http:Caller caller, http:Request req) returns error? {
-        io:println("Delete trip ", tripId, " (mocked)");
-        // check mongoClient->deleteById("trips", tripId);
-        check caller->respond({status: "Trip deleted (mocked)"});
-    }
-
-    resource function patch trips/[string tripId]/status(http:Caller caller, http:Request req) returns error? {
-        json body = check req.getJsonPayload();
-        io:println("Trip status updated (mocked): ", body.toJsonString());
-        // Kafka: check kafkaProducer->send({topic: "notifications", value: body});
-        // DB: check mongoClient->updateById("trips", tripId, body);
-        check caller->respond({status: "Trip status updated (mocked)"});
-    }
-
-   
-    // SERVICE DISRUPTIONS
-    
-    resource function post disruptions(http:Caller caller, http:Request req) returns error? {
-        json body = check req.getJsonPayload();
-        io:println("Service disruption published (mocked): ", body.toJsonString());
-        // Kafka: check kafkaProducer->send({topic: "service_disruption", value: body});
-        // DB: check mongoClient->insert("disruptions", body);
-        check caller->respond({status: "Disruption published (mocked)"});
-    }
-
   
-    // REPORTS
-    
-    resource function get reports(http:Caller caller, http:Request req) returns error? {
-        io:println("Admin requested reports");
-        // DB: json[] reports = await mongoClient->find("reports", {});
-       json payload = [];
-    check caller->respond(payload);
+    // Service-level fields
+    mongodb:Client mongoClient;
+    mongodb:Database transportDb;
+    mongodb:Collection routesCollection;
+    mongodb:Collection tripsCollection;
+    mongodb:Collection disruptionsCollection;
+    mongodb:Collection reportsCollection;
+
+    kafka:Producer kafkaProducer;
+
+    // Service initialization
+    isolated function init() returns error? {
+        log:printInfo("Initializing Admin Service...");
+
+        // Initialize MongoDB client and collections
+       self.mongoClient = check new ({
+    connection: "mongodb://root:password@mongodb:27017/transport_db"
+});
+
+        self.transportDb = check self.mongoClient->getDatabase("transport_db");
+        self.routesCollection = check self.transportDb->getCollection("routes");
+        self.tripsCollection = check self.transportDb->getCollection("trips");
+        self.disruptionsCollection = check self.transportDb->getCollection("disruptions");
+        self.reportsCollection = check self.transportDb->getCollection("reports");
+
+        // Initialize Kafka producer
+        self.kafkaProducer = check new ("localhost:9092");
+
+        log:printInfo("Admin Service initialized successfully");
     }
+
+    // ==============================
+    // ROUTE MANAGEMENT
+    // ==============================
+    isolated resource function post routes(http:Caller caller, http:Request req) returns error? {
+        log:printInfo("POST /admin/routes - Creating route");
+        json payload = check req.getJsonPayload();
+        map<json> routeData = <map<json>>payload;
+
+        check self.routesCollection->insertOne(routeData);
+
+        string routeId = (check payload.routeId).toString();
+
+        // Kafka notification
+        ScheduleUpdate update = {
+            eventType: "ROUTE_CREATED",
+            resourceId: routeId,
+            data: payload,
+            timestamp: time:utcNow()
+        };
+        check self.kafkaProducer->send({topic: "schedule.updates", value: update});
+
+        check caller->respond({status: "Route created", id: routeId});
+    }
+
+    isolated resource function get routes(http:Caller caller, http:Request req) returns error? {
+        log:printInfo("GET /admin/routes - Fetching all routes");
+        stream<map<json>, error?> resultStream = check self.routesCollection->find();
+        map<json>[] routes = check from map<json> route in resultStream select route;
+        check caller->respond(routes);
+    }
+
+    isolated resource function put routes/[string routeId](http:Caller caller, http:Request req) returns error? {
+        log:printInfo("PUT /admin/routes/" + routeId + " - Updating route");
+        json payload = check req.getJsonPayload();
+        map<json> updateData = <map<json>>payload;
+
+        mongodb:UpdateResult result = check self.routesCollection->updateOne(
+            {routeId: routeId}, {set: updateData}
+        );
+
+        ScheduleUpdate update = {
+            eventType: "ROUTE_UPDATED",
+            resourceId: routeId,
+            data: payload,
+            timestamp: time:utcNow()
+        };
+        check self.kafkaProducer->send({topic: "schedule.updates", value: update});
+
+        check caller->respond({
+            status: "Route updated",
+            matchedCount: result.matchedCount,
+            modifiedCount: result.modifiedCount
+        });
+    }
+
+    isolated resource function delete routes/[string routeId](http:Caller caller, http:Request req) returns error? {
+        log:printInfo("DELETE /admin/routes/" + routeId + " - Deleting route");
+        mongodb:DeleteResult result = check self.routesCollection->deleteOne({routeId: routeId});
+
+        ScheduleUpdate update = {
+            eventType: "ROUTE_DELETED",
+            resourceId: routeId,
+            data: {},
+            timestamp: time:utcNow()
+        };
+        check self.kafkaProducer->send({topic: "schedule.updates", value: update});
+
+        check caller->respond({status: "Route deleted", deletedCount: result.deletedCount});
+    }
+
+    // ==============================
+    // TRIP MANAGEMENT
+    // ==============================
+    isolated resource function post trips(http:Caller caller, http:Request req) returns error? {
+        log:printInfo("POST /admin/trips - Creating trip");
+        json payload = check req.getJsonPayload();
+        map<json> tripData = <map<json>>payload;
+
+        check self.tripsCollection->insertOne(tripData);
+        string tripId = (check payload.tripId).toString();
+
+        ScheduleUpdate update = {
+            eventType: "TRIP_CREATED",
+            resourceId: tripId,
+            data: payload,
+            timestamp: time:utcNow()
+        };
+        check self.kafkaProducer->send({topic: "schedule.updates", value: update});
+        check caller->respond({status: "Trip created", id: tripId});
+    }
+
+    isolated resource function get trips(http:Caller caller, http:Request req) returns error? {
+        log:printInfo("GET /admin/trips - Fetching trips");
+        stream<map<json>, error?> resultStream = check self.tripsCollection->find();
+        map<json>[] trips = check from map<json> trip in resultStream select trip;
+        check caller->respond(trips);
+    }
+
+    isolated resource function put trips/[string tripId](http:Caller caller, http:Request req) returns error? {
+        log:printInfo("PUT /admin/trips/" + tripId + " - Updating trip");
+        json payload = check req.getJsonPayload();
+        map<json> updateData = <map<json>>payload;
+
+        mongodb:UpdateResult result = check self.tripsCollection->updateOne(
+            {tripId: tripId}, {set: updateData}
+        );
+
+        ScheduleUpdate update = {
+            eventType: "TRIP_UPDATED",
+            resourceId: tripId,
+            data: payload,
+            timestamp: time:utcNow()
+        };
+        check self.kafkaProducer->send({topic: "schedule.updates", value: update});
+
+        check caller->respond({
+            status: "Trip updated",
+            matchedCount: result.matchedCount,
+            modifiedCount: result.modifiedCount
+        });
+    }
+
+    isolated resource function delete trips/[string tripId](http:Caller caller, http:Request req) returns error? {
+        log:printInfo("DELETE /admin/trips/" + tripId + " - Deleting trip");
+        mongodb:DeleteResult result = check self.tripsCollection->deleteOne({tripId: tripId});
+
+        ScheduleUpdate update = {
+            eventType: "TRIP_DELETED",
+            resourceId: tripId,
+            data: {},
+            timestamp: time:utcNow()
+        };
+        check self.kafkaProducer->send({topic: "schedule.updates", value: update});
+        check caller->respond({status: "Trip deleted", deletedCount: result.deletedCount});
+    }
+
+    isolated resource function patch trips/[string tripId]/status(http:Caller caller, http:Request req) returns error? {
+        log:printInfo("PATCH /admin/trips/" + tripId + "/status - Updating status");
+        json payload = check req.getJsonPayload();
+        map<json> updateData = <map<json>>payload;
+
+        mongodb:UpdateResult result = check self.tripsCollection->updateOne(
+            {tripId: tripId}, {set: updateData}
+        );
+
+        ScheduleUpdate update = {
+            eventType: "TRIP_STATUS_UPDATED",
+            resourceId: tripId,
+            data: payload,
+            timestamp: time:utcNow()
+        };
+        check self.kafkaProducer->send({topic: "schedule.updates", value: update});
+
+        check caller->respond({
+            status: "Trip status updated",
+            matchedCount: result.matchedCount,
+            modifiedCount: result.modifiedCount
+        });
+    }
+
+    // ==============================
+    // SERVICE DISRUPTIONS
+    // ==============================
+    isolated resource function post disruptions(http:Caller caller, http:Request req) returns error? {
+        log:printInfo("POST /admin/disruptions - Creating disruption");
+        json payload = check req.getJsonPayload();
+        map<json> disruptionData = <map<json>>payload;
+
+        check self.disruptionsCollection->insertOne(disruptionData);
+
+        string routeId = (check payload.routeId).toString();
+        string severity = (check payload.severity).toString();
+        string description = (check payload.description).toString();
+        string disruptionId = "disruption-" + routeId + "-" + time:utcNow()[0].toString();
+
+        ServiceDisruption disruption = {
+            disruptionId: disruptionId,
+            routeId: routeId,
+            severity: severity,
+            description: description,
+            timestamp: time:utcNow()
+        };
+        check self.kafkaProducer->send({topic: "service.disruptions", value: disruption});
+        check caller->respond({status: "Disruption published", id: disruptionId});
+    }
+
+    // ==============================
+    // REPORTS
+    // ==============================
+    isolated resource function get reports(http:Caller caller, http:Request req) returns error? {
+        log:printInfo("GET /admin/reports - Fetching reports");
+        stream<map<json>, error?> resultStream = check self.reportsCollection->find();
+        map<json>[] reports = check from map<json> report in resultStream select report;
+        check caller->respond(reports);
+    }
+
+    
 }
