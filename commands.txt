@@ -5,13 +5,17 @@ docker compose up -d
 docker exec -it kafka1 /bin/bash
 
 kafka-topics --create --topic passenger.requests --partitions 3 --replication-factor 1 --bootstrap-server localhost:9092
+kafka-topics --create --topic passenger.trip.requests --partitions 3 --replication-factor 1 --bootstrap-server localhost:9092
+kafka-topics --create --topic passenger.trip.responses--partitions 3 --replication-factor 1 --bootstrap-server localhost:9092
 kafka-topics --create --topic ticket.requests --partitions 3 --replication-factor 1 --bootstrap-server localhost:9092
 kafka-topics --create --topic payment.requests --partitions 3 --replication-factor 1 --bootstrap-server localhost:9092
 kafka-topics --create --topic payment.status --partitions 3 --replication-factor 1 --bootstrap-server localhost:9092
-kafka1 kafka-topics --create --topic ticket.status.updates --partitions 3 --replication-factor 1 --bootstrap-server localhost:9092
+kafka-topics --create --topic ticket.status.updates --partitions 3 --replication-factor 1 --bootstrap-server localhost:9092
 kafka-topics --create --topic schedule.updates --partitions 3 --replication-factor 1 --bootstrap-server localhost:9092
-kafka-topics --create --topic notification.events --partitions 3 --replication-factor 1 --bootstrap-server localhost:9092
-kafka-topics --create --topic admin.commands --partitions 3 --replication-factor 1 --bootstrap-server localhost:9092
+kafka-topics --create --topic trip.schedule.updates --partitions 3 --replication-factor 1 --bootstrap-server localhost:9092
+kafka-topics --create --topic notifications --partitions 3 --replication-factor 1 --bootstrap-server localhost:9092
+kafka-topics --create --topic service.disruptions --partitions 3 --replication-factor 1 --bootstrap-server localhost:9092
+
 
 # 2nd terminal to listen to ticket.requests
 
@@ -27,3 +31,11 @@ docker exec -it kafka1 kafka-console-producer --topic ticket.requests --bootstra
 
 # Test message
 {"passengerId":"TEST_123","routeId":"BUS_101","tripId":"TRIP_001","ticketType":"SINGLE_RIDE","price":15.50,"paymentMethod":"CASH"}
+
+
+docker exec -it mongodb bash
+# then inside container:
+mongosh -u root -p password --authenticationDatabase admin
+# in mongosh:
+use transport_db
+db.routes.find().pretty()
