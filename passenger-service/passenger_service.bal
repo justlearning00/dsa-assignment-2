@@ -16,7 +16,7 @@ service /passenger on new http:Listener(8081) {
         json body = check req.getJsonPayload();
         io:println("Register passenger (mocked): ", body.toJsonString());
         // check mongoClient->insert("users", body);
-        check caller->respond({status: "Passenger registered successfully"});
+        check caller->respond({status: "Passenger registered successfully (mocked)"});
     }
 
     //  LOGIN passenger
