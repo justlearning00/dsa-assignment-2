@@ -5,7 +5,7 @@ import ballerinax/mongodb;
 import ballerinax/kafka;
 import ballerina/lang.'value;
 
-listener http:Listener httpListener = new(8085);
+listener http:Listener httpListener = new(8083);
 
 final PaymentRepository repo = check getPaymentRepository();
 final kafka:Producer kafkaProducer = check new (kafka:DEFAULT_URL);
@@ -362,5 +362,5 @@ service /api on httpListener {
 }
 
 public function main() returns error? {
-    log:printInfo("Payment Service API server started on port 8085");
+    log:printInfo("Payment Service API server started on port 8083");
 }
