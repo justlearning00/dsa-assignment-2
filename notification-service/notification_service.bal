@@ -5,7 +5,7 @@ import ballerinax/kafka;
 import ballerina/time;
 
 
-service /notifications on new http:Listener(8083) {
+service /notifications on new http:Listener(8085) {
   
     // Service-level fields
     mongodb:Client mongoClient;
@@ -132,7 +132,7 @@ json eventData = check message.fromJsonString();
 }
 
 public function main() returns error? {
-    log:printInfo("Starting Notification Service on port 8083...");
+    log:printInfo("Starting Notification Service on port 8085...");
 
     // Start Kafka consumer in background
     // Note: In production, you'd run this in a separate worker or service
