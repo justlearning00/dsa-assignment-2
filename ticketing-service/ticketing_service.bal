@@ -7,9 +7,7 @@ import ballerinax/kafka;
 
 listener http:Listener httpListener = new(8083);
 
-final TicketRepository repo = check getTicketRepository();
-
-type Ticket record {|
+public type Ticket record {|
     string ticketId;
     string passengerId;
     string tripId;
@@ -24,14 +22,14 @@ type Ticket record {|
     string? paymentId;
 |};
 
-type TicketRequest record {|
+public type TicketRequest record {|
     string passengerId;
     string tripId;
     string ticketType;
     decimal amount;
 |};
 
-type PaymentRequest record {|
+public type PaymentRequest record {|
     string ticketId;
     string passengerId;
     string tripId;
@@ -40,7 +38,7 @@ type PaymentRequest record {|
     time:Utc timestamp;
 |};
 
-type PaymentStatus record {|
+public type PaymentStatus record {|
     string paymentId;
     string ticketId;
     string passengerId;
@@ -85,7 +83,7 @@ public class TicketRepository {
     public function getTicket(string ticketId) returns Ticket|error {
         Ticket? result = check self.tickets->findOne({ticketId: ticketId});
         if result is () {
-            return error("TICKET_NOT_FOUND");
+            return error("TICKET_NOT_FOUND: No ticket found with ID " + ticketId);
         }
         return result;
     }
@@ -119,7 +117,7 @@ public class TicketRepository {
         mongodb:UpdateResult result = check self.tickets->updateOne({ticketId: ticketId}, updateObj);
         
         if result.matchedCount == 0 {
-            return error("TICKET_NOT_FOUND");
+            return error("TICKET_NOT_FOUND: No ticket found with ID " + ticketId);
         }
         
         return self.getTicket(ticketId);
@@ -163,11 +161,59 @@ function calculateExpiry(string ticketType) returns time:Utc {
 
 service /tickets on httpListener {
     
+    TicketRepository repo;
     kafka:Producer kafkaProducer;
+    kafka:Consumer paymentConsumer;
     
     function init() returns error? {
+        log:printInfo("Initializing Ticketing Service...");
+        
+        self.repo = check getTicketRepository();
         self.kafkaProducer = check new ("localhost:9092");
-        log:printInfo("Ticketing Service initialized with Kafka producer");
+        self.paymentConsumer = check new (kafka:DEFAULT_URL, {
+            groupId: "ticketing-service",
+            topics: ["payment.status"]
+        });
+        
+        log:printInfo("Ticketing Service initialized successfully");
+        _ = start self.processPaymentStatusUpdates();
+    }
+    
+    function processPaymentStatusUpdates() returns error? {
+        while true {
+            do {
+                kafka:AnydataConsumerRecord[] records = check self.paymentConsumer->poll(1000);
+                
+                foreach var rec in records {
+                    byte[] valueBytes = <byte[]>rec.value;
+                    string jsonString = check string:fromBytes(valueBytes);
+                    json statusData = check jsonString.fromJsonString();
+                    PaymentStatus paymentStatus = check statusData.cloneWithType();
+                    
+                    log:printInfo("Received payment status for ticket: " + paymentStatus.ticketId + " - " + paymentStatus.status);
+                    
+                    if paymentStatus.status == "SUCCESS" {
+                        _ = check self.repo.updateTicketStatus(
+                            paymentStatus.ticketId,
+                            "PAID",
+                            (),
+                            paymentStatus.paymentId
+                        );
+                        log:printInfo("Ticket " + paymentStatus.ticketId + " marked as PAID");
+                    } else if paymentStatus.status == "FAILED" {
+                        _ = check self.repo.updateTicketStatus(
+                            paymentStatus.ticketId,
+                            "CANCELLED",
+                            (),
+                            ()
+                        );
+                        log:printInfo("Ticket " + paymentStatus.ticketId + " cancelled due to payment failure");
+                    }
+                }
+            } on fail error e {
+                log:printError("Error processing payment status update: " + e.message());
+            }
+        }
     }
     
     resource function post create(http:Caller caller, http:Request req) returns error? {
@@ -193,9 +239,8 @@ service /tickets on httpListener {
             paymentId: ()
         };
         
-        Ticket created = check repo.createTicket(ticket);
+        _ = check self.repo.createTicket(ticket);
         
-        // Send payment request to Kafka
         PaymentRequest paymentReq = {
             ticketId: ticketId,
             passengerId: request.passengerId,
@@ -223,14 +268,16 @@ service /tickets on httpListener {
         json payload = check req.getJsonPayload();
         PaymentStatus paymentStatus = check payload.cloneWithType();
         
-        log:printInfo("Manual payment status update for ticket: " + ticketId + " - " + paymentStatus.status);
+        log:printInfo("Payment status update for ticket: " + ticketId + " - " + paymentStatus.status);
         
         if paymentStatus.status == "SUCCESS" {
-            Ticket|error updated = repo.updateTicketStatus(ticketId, "PAID", (), paymentStatus.paymentId);
+            Ticket|error updated = self.repo.updateTicketStatus(ticketId, "PAID", (), paymentStatus.paymentId);
             
             if updated is error {
-                json errorResponse = {"error": "Failed to update ticket status: " + updated.message()};
-                check caller->respond(errorResponse);
+                http:Response response = new;
+                response.statusCode = 500;
+                response.setJsonPayload({"error": "Failed to update ticket status: " + updated.message()});
+                check caller->respond(response);
                 return;
             } else {
                 json purchaseEvent = {
@@ -248,10 +295,12 @@ service /tickets on httpListener {
                 check caller->respond(response);
             }
         } else {
-            Ticket|error cancelResult = repo.updateTicketStatus(ticketId, "CANCELLED", (), ());
+            Ticket|error cancelResult = self.repo.updateTicketStatus(ticketId, "CANCELLED", (), ());
             if cancelResult is error {
-                json errorResponse = {"error": "Failed to cancel ticket: " + cancelResult.message()};
-                check caller->respond(errorResponse);
+                http:Response response = new;
+                response.statusCode = 500;
+                response.setJsonPayload({"error": "Failed to cancel ticket: " + cancelResult.message()});
+                check caller->respond(response);
             } else {
                 json response = {"status": "CANCELLED", "message": "Ticket cancelled due to payment failure"};
                 check caller->respond(response);
@@ -263,46 +312,48 @@ service /tickets on httpListener {
         json payload = check req.getJsonPayload();
         string validatorId = check payload.validatorId;
         
-        Ticket|error ticketResult = repo.getTicket(ticketId);
+        Ticket|error ticketResult = self.repo.getTicket(ticketId);
         if ticketResult is error {
-            json errorResponse = {"error": "Ticket not found", "ticketId": ticketId};
-            check caller->respond(errorResponse);
+            http:Response response = new;
+            response.statusCode = 404;
+            response.setJsonPayload({"error": "Ticket not found", "ticketId": ticketId});
+            check caller->respond(response);
             return;
         }
         
         Ticket ticket = ticketResult;
         
         if ticket.status != "PAID" {
-            json errorResponse = {"error": "Ticket cannot be validated - current status: " + ticket.status};
-            check caller->respond(errorResponse);
+            http:Response response = new;
+            response.statusCode = 400;
+            response.setJsonPayload({"error": "Ticket cannot be validated - current status: " + ticket.status});
+            check caller->respond(response);
             return;
         }
         
-        
-        // Check if ticket expired
         time:Utc now = time:utcNow();
         string nowStr = now.toString();
         string expiresStr = ticket.expiresAt.toString();
         
         if nowStr > expiresStr {
-            Ticket|error expireResult = repo.updateTicketStatus(ticketId, "EXPIRED", (), ());
-            if expireResult is error {
-                log:printError("Failed to expire ticket: " + expireResult.message());
-            }
-            json errorResponse = {"error": "Ticket has expired"};
-            check caller->respond(errorResponse);
+            _ = check self.repo.updateTicketStatus(ticketId, "EXPIRED", (), ());
+            http:Response response = new;
+            response.statusCode = 400;
+            response.setJsonPayload({"error": "Ticket has expired"});
+            check caller->respond(response);
             return;
         }
         
-        Ticket|error updated = repo.updateTicketStatus(ticketId, "VALIDATED", validatorId, ());
+        Ticket|error updated = self.repo.updateTicketStatus(ticketId, "VALIDATED", validatorId, ());
         
         if updated is error {
-            json errorResponse = {"error": "Failed to validate ticket", "ticketId": ticketId};
-            check caller->respond(errorResponse);
+            http:Response response = new;
+            response.statusCode = 500;
+            response.setJsonPayload({"error": "Failed to validate ticket", "ticketId": ticketId});
+            check caller->respond(response);
             return;
         }
         
-        // Send ticket validated event
         json validationEvent = {
             ticketId: ticketId,
             passengerId: ticket.passengerId,
@@ -320,20 +371,24 @@ service /tickets on httpListener {
     }
 
     resource function get [string ticketId](http:Caller caller) returns error? {
-        Ticket|error ticketResult = repo.getTicket(ticketId);
+        Ticket|error ticketResult = self.repo.getTicket(ticketId);
         if ticketResult is error {
-            json errorResponse = {"error": "Ticket not found", "ticketId": ticketId};
-            check caller->respond(errorResponse);
+            http:Response response = new;
+            response.statusCode = 404;
+            response.setJsonPayload({"error": "Ticket not found", "ticketId": ticketId});
+            check caller->respond(response);
             return;
         }
         check caller->respond(toJson(ticketResult));
     }
 
     resource function get passenger/[string passengerId](http:Caller caller) returns error? {
-        Ticket[]|error ticketsResult = repo.getPassengerTickets(passengerId);
+        Ticket[]|error ticketsResult = self.repo.getPassengerTickets(passengerId);
         if ticketsResult is error {
-            json errorResponse = {"error": "Failed to fetch tickets", "passengerId": passengerId};
-            check caller->respond(errorResponse);
+            http:Response response = new;
+            response.statusCode = 500;
+            response.setJsonPayload({"error": "Failed to fetch tickets", "passengerId": passengerId});
+            check caller->respond(response);
             return;
         }
         json[] ticketJsonArray = [];

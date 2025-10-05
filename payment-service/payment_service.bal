@@ -7,23 +7,20 @@ import ballerinax/kafka;
 
 listener http:Listener httpListener = new(8084);
 
-final PaymentRepository repo = check getPaymentRepository();
-final kafka:Producer kafkaProducer = check new ("localhost:9092");
-
- public type Payment record {|
+public type Payment record {|
     string paymentId;
     string ticketId;
     string passengerId;
     decimal amount;
     string currency;
-    string status; // PENDING, SUCCESS, FAILED
+    string status;
     string paymentMethod;
     string? transactionId;
     time:Utc createdAt;
     time:Utc? updatedAt;
 |};
 
-type PaymentRequest record {|
+public type PaymentRequest record {|
     string ticketId;
     string passengerId;
     string tripId;
@@ -32,16 +29,16 @@ type PaymentRequest record {|
     time:Utc timestamp;
 |};
 
-type PaymentStatus record {|
+public type PaymentStatus record {|
     string paymentId;
     string ticketId;
     string passengerId;
-    string status; // SUCCESS, FAILED
+    string status;
     decimal amount;
     time:Utc timestamp;
 |};
 
-type PaymentResponse record {|
+public type PaymentResponse record {|
     string paymentId;
     string status;
     string? transactionId;
@@ -82,7 +79,7 @@ public class PaymentRepository {
     public function getPayment(string paymentId) returns Payment|error {
         Payment? result = check self.payments->findOne({paymentId: paymentId});
         if result is () {
-            return error("PAYMENT_NOT_FOUND");
+            return error("PAYMENT_NOT_FOUND: No payment found with ID " + paymentId);
         }
         return result;
     }
@@ -113,7 +110,7 @@ public class PaymentRepository {
         mongodb:UpdateResult result = check self.payments->updateOne({paymentId: paymentId}, updateObj);
         
         if result.matchedCount == 0 {
-            return error("PAYMENT_NOT_FOUND");
+            return error("PAYMENT_NOT_FOUND: No payment found with ID " + paymentId);
         }
         
         return self.getPayment(paymentId);
@@ -143,38 +140,134 @@ function getPaymentRepository() returns PaymentRepository|error {
 }
 
 function generatePaymentId() returns string {
-    return "PAY-" + time:utcNow().toString().substring(0, 19);
+    time:Utc now = time:utcNow();
+    return "PAY-" + now[0].toString() + now[1].toString();
 }
 
 function generateTransactionId() returns string {
-    return "TXN-" + time:utcNow().toString().substring(0, 19);
+    time:Utc now = time:utcNow();
+    return "TXN-" + now[0].toString() + now[1].toString();
 }
 
-// Simulate payment processing - in real scenario, integrate with payment gateway
 function processPayment(decimal amount, string paymentMethod) returns boolean {
-    // Simple 90% success rate without complex randomness
-    // Just alternate between success and failure for testing
-    int counter = 0;
-    counter = counter + 1;
-    return counter % 10 != 0; // 90% success (fails every 10th attempt)
+    decimal nanos = time:utcNow()[1];
+    float random = <float>nanos;
+    return random % 10.0 < 9.0;
+}
+
+function validatePaymentInput(string ticketId, string passengerId, decimal amount, string paymentMethod) returns error? {
+    if ticketId.trim().length() == 0 {
+        return error("Invalid input: ticketId cannot be empty");
+    }
+    if passengerId.trim().length() == 0 {
+        return error("Invalid input: passengerId cannot be empty");
+    }
+    if amount <= 0.0d {
+        return error("Invalid input: amount must be positive");
+    }
+    if paymentMethod.trim().length() == 0 {
+        return error("Invalid input: paymentMethod cannot be empty");
+    }
 }
 
 service /payments on httpListener {
+    
+    PaymentRepository repo;
+    kafka:Producer kafkaProducer;
+    kafka:Consumer kafkaConsumer;
+    
+    function init() returns error? {
+        log:printInfo("Initializing Payment Service...");
+        
+        self.repo = check getPaymentRepository();
+        self.kafkaProducer = check new ("localhost:9092");
+        self.kafkaConsumer = check new (kafka:DEFAULT_URL, {
+            groupId: "payment-service",
+            topics: ["payment.requests"]
+        });
+        
+        log:printInfo("Payment Service initialized successfully");
+        _ = start self.processPaymentRequests();
+    }
+    
+    function processPaymentRequests() returns error? {
+        while true {
+            do {
+                kafka:AnydataConsumerRecord[] records = check self.kafkaConsumer->poll(1000);
+                
+                foreach var rec in records {
+                    byte[] valueBytes = <byte[]>rec.value;
+                    string jsonString = check string:fromBytes(valueBytes);
+                    json paymentData = check jsonString.fromJsonString();
+                    PaymentRequest paymentReq = check paymentData.cloneWithType();
+                    
+                    log:printInfo("Received payment request for ticket: " + paymentReq.ticketId);
+                    
+                    string paymentId = generatePaymentId();
+                    time:Utc createdAt = time:utcNow();
+                    
+                    Payment payment = {
+                        paymentId: paymentId,
+                        ticketId: paymentReq.ticketId,
+                        passengerId: paymentReq.passengerId,
+                        amount: paymentReq.amount,
+                        currency: "NAD",
+                        status: "PENDING",
+                        paymentMethod: "CARD",
+                        transactionId: (),
+                        createdAt: createdAt,
+                        updatedAt: ()
+                    };
+                    
+                    _ = check self.repo.createPayment(payment);
+                    
+                    boolean paymentSuccess = processPayment(paymentReq.amount, "CARD");
+                    string status = paymentSuccess ? "SUCCESS" : "FAILED";
+                    string? transactionId = paymentSuccess ? generateTransactionId() : ();
+                    
+                    _ = check self.repo.updatePaymentStatus(paymentId, status, transactionId);
+                    
+                    PaymentStatus paymentStatus = {
+                        paymentId: paymentId,
+                        ticketId: paymentReq.ticketId,
+                        passengerId: paymentReq.passengerId,
+                        status: status,
+                        amount: paymentReq.amount,
+                        timestamp: time:utcNow()
+                    };
+                    
+                    check self.kafkaProducer->send({
+                        topic: "payment.status", 
+                        value: paymentStatus
+                    });
+                    
+                    log:printInfo("Payment processed: " + paymentId + " - " + status);
+                }
+            } on fail error e {
+                log:printError("Error processing payment request: " + e.message());
+            }
+        }
+    }
+
     resource function get [string paymentId](http:Caller caller) returns error? {
-        Payment|error paymentResult = repo.getPayment(paymentId);
+        Payment|error paymentResult = self.repo.getPayment(paymentId);
         if paymentResult is error {
-            json errorResponse = {"error": "Payment not found", "paymentId": paymentId};
-            check caller->respond(errorResponse);
+            http:Response response = new;
+            response.statusCode = 404;
+            response.setJsonPayload({"error": "Payment not found", "paymentId": paymentId});
+            check caller->respond(response);
             return;
         }
         check caller->respond(toJson(paymentResult));
     }
 
     resource function get ticket/[string ticketId](http:Caller caller) returns error? {
-        Payment[]|error paymentsResult = repo.getPaymentsByTicket(ticketId);
+        Payment[]|error paymentsResult = self.repo.getPaymentsByTicket(ticketId);
         if paymentsResult is error {
-            json errorResponse = {"error": "Failed to fetch payments", "ticketId": ticketId};
-            check caller->respond(errorResponse);
+            http:Response response = new;
+            response.statusCode = 500;
+            response.setJsonPayload({"error": "Failed to fetch payments", "ticketId": ticketId});
+            check caller->respond(response);
             return;
         }
         json[] paymentJsonArray = [];
@@ -185,10 +278,12 @@ service /payments on httpListener {
     }
 
     resource function get passenger/[string passengerId](http:Caller caller) returns error? {
-        Payment[]|error paymentsResult = repo.getPassengerPayments(passengerId);
+        Payment[]|error paymentsResult = self.repo.getPassengerPayments(passengerId);
         if paymentsResult is error {
-            json errorResponse = {"error": "Failed to fetch payments", "passengerId": passengerId};
-            check caller->respond(errorResponse);
+            http:Response response = new;
+            response.statusCode = 500;
+            response.setJsonPayload({"error": "Failed to fetch payments", "passengerId": passengerId});
+            check caller->respond(response);
             return;
         }
         json[] paymentJsonArray = [];
@@ -196,18 +291,27 @@ service /payments on httpListener {
             paymentJsonArray.push(toJson(payment));
         }
         check caller->respond(paymentJsonArray);
-    }   
-        resource function post process(http:Caller caller, http:Request req) returns error? {
+    }
+
+    resource function post process(http:Caller caller, http:Request req) returns error? {
         json payload = check req.getJsonPayload();
         string ticketId = check payload.ticketId;
         string passengerId = check payload.passengerId;
         decimal amount = <decimal>check payload.amount;
         string paymentMethod = check payload.paymentMethod;
         
+        error? validationResult = validatePaymentInput(ticketId, passengerId, amount, paymentMethod);
+        if validationResult is error {
+            http:Response response = new;
+            response.statusCode = 400;
+            response.setJsonPayload({"error": validationResult.message()});
+            check caller->respond(response);
+            return;
+        }
+        
         string paymentId = generatePaymentId();
         time:Utc createdAt = time:utcNow();
         
-        // Create payment
         Payment payment = {
             paymentId: paymentId,
             ticketId: ticketId,
@@ -221,16 +325,14 @@ service /payments on httpListener {
             updatedAt: ()
         };
         
-     Payment created = check repo.createPayment(payment);
+        _ = check self.repo.createPayment(payment);
         
-        // Process payment
         boolean paymentSuccess = processPayment(amount, paymentMethod);
         string status = paymentSuccess ? "SUCCESS" : "FAILED";
         string? transactionId = paymentSuccess ? generateTransactionId() : ();
         
-        Payment updated = check repo.updatePaymentStatus(paymentId, status, transactionId);
-    
-        // Send to Kafka for ticketing service
+        _ = check self.repo.updatePaymentStatus(paymentId, status, transactionId);
+        
         PaymentStatus paymentStatus = {
             paymentId: paymentId,
             ticketId: ticketId,
@@ -240,7 +342,7 @@ service /payments on httpListener {
             timestamp: time:utcNow()
         };
         
-        check kafkaProducer->send({
+        check self.kafkaProducer->send({
             topic: "payment.status", 
             value: paymentStatus
         });
@@ -254,7 +356,7 @@ service /payments on httpListener {
         
         check caller->respond(response);
     }
-  
+
     resource function get health() returns json {
         return {"status": "healthy", "service": "Payment Service", "timestamp": time:utcNow().toString()};
     }
