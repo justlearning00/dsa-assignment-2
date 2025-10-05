@@ -5,7 +5,7 @@
 
 [ballerina]
 dependencies-toml-version = "2"
-distribution-version = "2201.12.9"
+distribution-version = "2201.12.7"
 
 [[package]]
 org = "ballerina"
@@ -13,6 +13,14 @@ name = "avro"
 version = "1.2.0"
 dependencies = [
 	{org = "ballerina", name = "jballerina.java"}
+]
+
+[[package]]
+org = "ballerina"
+name = "cloud"
+version = "3.3.4"
+modules = [
+	{org = "ballerina", packageName = "cloud", moduleName = "cloud"}
 ]
 
 [[package]]
@@ -156,6 +164,7 @@ org = "clxver"
 name = "client"
 version = "0.1.0"
 dependencies = [
+	{org = "ballerina", name = "cloud"},
 	{org = "ballerina", name = "io"},
 	{org = "ballerina", name = "time"},
 	{org = "ballerinai", name = "observe"},

@@ -1,67 +1,141 @@
 import ballerina/http;
-import ballerina/io;
+import ballerina/log;
 import ballerinax/mongodb;
 import ballerinax/kafka;
+import ballerina/time;
 
-mongodb:Client mongoClient = check new ({
-    connection: "mongodb://root:password@localhost:27017/transport_db"});
 
-// Placeholder for Kafka Consumer
- kafka:Consumer consumer = check new ("kafka1:19092");
-
-service /notifications on new http:Listener(8083) {
-
-    
-    // Send a notification 
-   
-    resource function post send(http:Caller caller, http:Request req) returns error? {
-        json body = check req.getJsonPayload();
-        io:println("Notification sent (mocked): ", body.toJsonString());
-        // Kafka: publish notification
-        // check kafkaProducer->send({topic: "notifications", value: body});
+service /notifications on new http:Listener(8085) {
   
-        // DB: insert into notifications collection
-        // check mongoClient->insert("notifications", body);
-       
-
-        check caller->respond({status: "Notification stored (mocked)"});
-    }
-
+    // Service-level fields
+    mongodb:Client mongoClient;
+    mongodb:Database transportDb;
+    mongodb:Collection notificationsCollection;
     
-    // Get all notifications 
-    
-    resource function get all(http:Caller caller, http:Request req) returns error? {
-        io:println("Fetching all notifications (mocked)");
+    kafka:Consumer kafkaConsumer;
 
-       
-        // DB: query notifications collection
-        // json[] notifications = await mongoClient->find("notifications", {});
-        json payload = [];
-    check caller->respond(payload);
-    }
+    // Service initialization
+     function init() returns error? {
+        log:printInfo("Initializing Notification Service...");
 
-    //  Get notifications for a specific user
-   
-    resource function get user/[string userId](http:Caller caller, http:Request req) returns error? {
-        io:println("Fetching notifications for user: ", userId);
+        // Initialize MongoDB
+        self.mongoClient = check new ({
+            connection: "mongodb://root:password@mongodb:27017/transport_db"
+        });
+
+        self.transportDb = check self.mongoClient->getDatabase("transport_db");
+        self.notificationsCollection = check self.transportDb->getCollection("notifications");
 
         
-        // DB: query notifications collection with userId filter
-        // json[] notifications = await mongoClient->find("notifications", {userId: userId});
-    json payload = [];
-    check caller->respond(payload);
         
+        // Initialize Kafka consumer to listen to admin service events
+        self.kafkaConsumer = check new (kafka:DEFAULT_URL, {
+            groupId: "notification-consumer-group",
+            topics: ["schedule.updates", "service.disruptions"]
+        });
+
+        log:printInfo("Notification Service initialized successfully");
+          _ = start self.processKafkaMessages();
+
     }
 
-    
-    //  Mark notification as read
-    
-    resource function put user/[string userId]/[string notificationId]/read(http:Caller caller, http:Request req) returns error? {
-        io:println("Marking notification ", notificationId, " as read for user ", userId);
+    // Process Kafka messages from admin service
+    isolated function processKafkaMessages() returns error? {
+        while true {
+            kafka:AnydataConsumerRecord[] records = check self.kafkaConsumer->poll(1000);
+            
+            foreach var rec in records {
+                byte[] valueBytes = <byte[]>rec.value;
+string message = check string:fromBytes(valueBytes);
+json eventData = check message.fromJsonString();
 
-        
-        // DB: update notification document
-        // check mongoClient->updateById("notifications", notificationId, {read: true})
-        check caller->respond({status: "Notification marked as read (mocked)"});
+                // Create notification based on event
+                map<json> notification = {
+                     notificationId: "kafka-" + time:utcNow()[0].toString(),
+                    userId: "all", // Or extract from event
+                    message: "Event: " + (check eventData.eventType).toString(),
+                    'type: (check eventData.eventType).toString(),
+                    read: false,
+                    timestamp: time:utcNow(),
+                    eventData: eventData
+                };
+                
+                check self.notificationsCollection->insertOne(notification);
+                log:printInfo("Created notification from Kafka event");
+            }
+        }
     }
+
+    // Send a notification
+    isolated resource function post send(http:Caller caller, http:Request req) returns error? {
+        log:printInfo("POST /notifications/send - Creating notification");
+        
+        json payload = check req.getJsonPayload();
+        map<json> notificationData = <map<json>>payload;
+        
+        // Store in database
+        check self.notificationsCollection->insertOne(notificationData);
+        check caller->respond({status: "Notification sent"});
+    }
+
+    // Get all notifications
+    isolated resource function get all(http:Caller caller, http:Request req) returns error? {
+        log:printInfo("GET /notifications/all - Fetching all notifications");
+
+        stream<map<json>, error?> resultStream = check self.notificationsCollection->find();
+        map<json>[] notifications = check from map<json> notif in resultStream select notif;
+        
+        check caller->respond(notifications);
+    }
+
+    // Get notifications for a user
+    isolated resource function get user/[string userId](http:Caller caller, http:Request req) returns error? {
+        log:printInfo("GET /notifications/user/" + userId);
+
+        stream<map<json>, error?> resultStream = check self.notificationsCollection->find(
+            filter = {userId: userId}
+        );
+        map<json>[] notifications = check from map<json> notif in resultStream select notif;
+        
+        check caller->respond(notifications);
+    }
+
+    // Mark notification as read
+    isolated resource function put [string notificationId]/read(http:Caller caller, http:Request req) returns error? {
+        log:printInfo("PUT /notifications/" + notificationId + "/read");
+
+        mongodb:UpdateResult result = check self.notificationsCollection->updateOne(
+            {notificationId: notificationId},
+            {set: {read: true}}
+        );
+
+        check caller->respond({
+            status: "Notification marked as read",
+            modifiedCount: result.modifiedCount
+        });
+    }
+
+    // Delete a notification
+    isolated resource function delete [string notificationId](http:Caller caller, http:Request req) returns error? {
+        log:printInfo("DELETE /notifications/" + notificationId);
+
+        mongodb:DeleteResult result = check self.notificationsCollection->deleteOne(
+            {notificationId: notificationId}
+        );
+
+        check caller->respond({
+            status: "Notification deleted",
+            deletedCount: result.deletedCount
+        });
+    }
+
+}
+
+public function main() returns error? {
+    log:printInfo("Starting Notification Service on port 8085...");
+
+    // Start Kafka consumer in background
+    // Note: In production, you'd run this in a separate worker or service
+    // For now, you need to call processKafkaMessages() 
+    
 }

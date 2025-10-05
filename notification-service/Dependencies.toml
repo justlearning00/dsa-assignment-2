@@ -5,7 +5,7 @@
 
 [ballerina]
 dependencies-toml-version = "2"
-distribution-version = "2201.12.7"
+distribution-version = "2201.12.9"
 
 [[package]]
 org = "ballerina"
@@ -210,9 +210,6 @@ version = "0.0.0"
 dependencies = [
 	{org = "ballerina", name = "jballerina.java"}
 ]
-modules = [
-	{org = "ballerina", packageName = "lang.value", moduleName = "lang.value"}
-]
 
 [[package]]
 org = "ballerina"
@@ -373,11 +370,10 @@ modules = [
 
 [[package]]
 org = "clxver"
-name = "transport_service"
+name = "notification_service"
 version = "0.1.0"
 dependencies = [
 	{org = "ballerina", name = "http"},
-	{org = "ballerina", name = "lang.value"},
 	{org = "ballerina", name = "log"},
 	{org = "ballerina", name = "time"},
 	{org = "ballerinai", name = "observe"},
@@ -385,6 +381,6 @@ dependencies = [
 	{org = "ballerinax", name = "mongodb"}
 ]
 modules = [
-	{org = "clxver", packageName = "transport_service", moduleName = "transport_service"}
+	{org = "clxver", packageName = "notification_service", moduleName = "notification_service"}
 ]
 
