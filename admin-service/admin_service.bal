@@ -60,7 +60,7 @@ service /admin on new http:Listener(8089) {
         map<json> routeData = <map<json>>payload;
 
         check self.routesCollection->insertOne(routeData);
-
+log:printInfo("Inserted route into MongoDB: " + routeData.toJsonString());
         string routeId = (check payload.routeId).toString();
 
         // Kafka notification
@@ -77,7 +77,7 @@ service /admin on new http:Listener(8089) {
 
     isolated resource function get routes(http:Caller caller, http:Request req) returns error? {
         log:printInfo("GET /admin/routes - Fetching all routes");
-        stream<map<json>, error?> resultStream = check self.routesCollection->find();
+        stream<map<json>, error?> resultStream = check self.routesCollection->find({});
         map<json>[] routes = check from map<json> route in resultStream select route;
         check caller->respond(routes);
     }
@@ -130,6 +130,7 @@ service /admin on new http:Listener(8089) {
         map<json> tripData = <map<json>>payload;
 
         check self.tripsCollection->insertOne(tripData);
+        log:printInfo("Inserted trip into MongoDB: " + tripData.toJsonString());
         string tripId = (check payload.tripId).toString();
 
         ScheduleUpdate update = {
@@ -144,7 +145,7 @@ service /admin on new http:Listener(8089) {
 
     isolated resource function get trips(http:Caller caller, http:Request req) returns error? {
         log:printInfo("GET /admin/trips - Fetching trips");
-        stream<map<json>, error?> resultStream = check self.tripsCollection->find();
+        stream<map<json>, error?> resultStream = check self.tripsCollection->find({});
         map<json>[] trips = check from map<json> trip in resultStream select trip;
         check caller->respond(trips);
     }
@@ -220,7 +221,7 @@ service /admin on new http:Listener(8089) {
         map<json> disruptionData = <map<json>>payload;
 
         check self.disruptionsCollection->insertOne(disruptionData);
-
+log:printInfo("Inserted disruption into MongoDB: " + disruptionData.toJsonString());
         string routeId = (check payload.routeId).toString();
         string severity = (check payload.severity).toString();
         string description = (check payload.description).toString();
@@ -241,7 +242,7 @@ service /admin on new http:Listener(8089) {
     // REPORTS
         isolated resource function get reports(http:Caller caller, http:Request req) returns error? {
         log:printInfo("GET /admin/reports - Fetching reports");
-        stream<map<json>, error?> resultStream = check self.reportsCollection->find();
+        stream<map<json>, error?> resultStream = check self.reportsCollection->find({});
         map<json>[] reports = check from map<json> report in resultStream select report;
         check caller->respond(reports);
     }
