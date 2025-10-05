@@ -7,10 +7,15 @@ import ballerina/lang.'value;
 
 listener http:Listener httpListener = new(8083);
 
-final PaymentRepository repo = check getPaymentRepository();
-final kafka:Producer kafkaProducer = check new (kafka:DEFAULT_URL);
+// Configurable variables
+configurable string dbUri = "mongodb://127.0.0.1:27017";
+configurable string dbName = "transport_db";
+configurable string kafkaUrl = "localhost:9092";
 
-type Route record {
+final PaymentRepository repo = check getPaymentRepository();
+final kafka:Producer kafkaProducer = check getKafkaProducer();
+
+public type Route record {
     string routeId;
     string startLocation;
     string endLocation;
@@ -20,7 +25,7 @@ type Route record {
     string? updatedTime;
 };
 
-type Trip record {
+public type Trip record {
     string tripId;
     string routeId;
     string vehicleId;
@@ -33,7 +38,7 @@ type Trip record {
     string createdTime;
 };
 
-type Payment record {
+public type Payment record {
     string paymentId;
     string tripId;
     string passengerId;
@@ -46,17 +51,18 @@ type Payment record {
     string? updatedTime;
 };
 
-type TripStatusUpdate record {
+public type TripStatusUpdate record {
     string status;
     string? reason;
 };
 
-type PaymentStatusUpdate record {
+public type PaymentStatusUpdate record {
     string status;
     string? transactionId;
 };
 
-isolated function toJson(Route route) returns json {
+// Helper functions to convert records to JSON
+isolated function routeToJson(Route route) returns json {
     return {
         routeId: route.routeId,
         startLocation: route.startLocation,
@@ -68,35 +74,35 @@ isolated function toJson(Route route) returns json {
     };
 }
 
-// isolated function toJson(Trip trip) returns json {
-//     return {
-//         tripId: trip.tripId,
-//         routeId: trip.routeId,
-//         vehicleId: trip.vehicleId,
-//         driverId: trip.driverId,
-//         status: trip.status,
-//         scheduledTime: trip.scheduledTime,
-//         actualStartTime: trip.actualStartTime,
-//         actualEndTime: trip.actualEndTime,
-//         actualCost: trip.actualCost,
-//         createdTime: trip.createdTime
-//     };
-// }
+isolated function tripToJson(Trip trip) returns json {
+    return {
+        tripId: trip.tripId,
+        routeId: trip.routeId,
+        vehicleId: trip.vehicleId,
+        driverId: trip.driverId,
+        status: trip.status,
+        scheduledTime: trip.scheduledTime,
+        actualStartTime: trip.actualStartTime,
+        actualEndTime: trip.actualEndTime,
+        actualCost: trip.actualCost,
+        createdTime: trip.createdTime
+    };
+}
 
-// isolated function toJson(Payment payment) returns json {
-//     return {
-//         paymentId: payment.paymentId,
-//         tripId: payment.tripId,
-//         passengerId: payment.passengerId,
-//         amount: payment.amount,
-//         currency: payment.currency,
-//         status: payment.status,
-//         paymentMethod: payment.paymentMethod,
-//         transactionId: payment.transactionId,
-//         createdTime: payment.createdTime,
-//         updatedTime: payment.updatedTime
-//     };
-// }
+isolated function paymentToJson(Payment payment) returns json {
+    return {
+        paymentId: payment.paymentId,
+        tripId: payment.tripId,
+        passengerId: payment.passengerId,
+        amount: payment.amount,
+        currency: payment.currency,
+        status: payment.status,
+        paymentMethod: payment.paymentMethod,
+        transactionId: payment.transactionId,
+        createdTime: payment.createdTime,
+        updatedTime: payment.updatedTime
+    };
+}
 
 public isolated class PaymentRepository {
     private final mongodb:Collection routes;
@@ -224,15 +230,32 @@ public isolated class PaymentRepository {
     }
 }
 
+// Get MongoDB client
+isolated function getMongoClient() returns mongodb:Client|error {
+    mongodb:ConnectionConfig config = {
+        connection: dbUri
+    };
+    log:printInfo("Connecting to MongoDB at: " + dbUri);
+    return check new (config);
+}
+
+// Initialize repository with collections
 isolated function getPaymentRepository() returns PaymentRepository|error {
-    mongodb:Client mongoClient = check new ({
-        connection: "mongodb://root:password@mongo-db:27017/transport_db"
-    });
-    mongodb:Database database = check mongoClient->getDatabase("transport_db");
+    mongodb:Client mongoClient = check getMongoClient();
+    mongodb:Database database = check mongoClient->getDatabase(dbName);
+    log:printInfo("Connected to database: " + dbName);
+    
     mongodb:Collection routes = check database->getCollection("routes");
     mongodb:Collection trips = check database->getCollection("trips");
     mongodb:Collection payments = check database->getCollection("payments");
+    
     return new(routes, trips, payments);
+}
+
+// Get Kafka producer
+isolated function getKafkaProducer() returns kafka:Producer|error {
+    log:printInfo("Connecting to Kafka at: " + kafkaUrl);
+    return check new (kafkaUrl);
 }
 
 service /api on httpListener {
@@ -240,14 +263,14 @@ service /api on httpListener {
         json payload = check req.getJsonPayload();
         Route route = check payload.cloneWithType();
         Route created = check repo.createRoute(route);
-        check kafkaProducer->send({topic: "route.created", value: created.toJson().toJsonString()});
-        json response = {"message": "Route created successfully", "route": created.toJson()};
+        check kafkaProducer->send({topic: "route.created", value: routeToJson(created).toJsonString()});
+        json response = {"message": "Route created successfully", "route": routeToJson(created)};
         check caller->respond(response);
     }
 
     isolated resource function get routes(http:Caller caller, http:Request req) returns error? {
         Route[] routes = check repo.getAllRoutes();
-        json[] routeJsonArray = from Route route in routes select route.toJson();
+        json[] routeJsonArray = from Route route in routes select routeToJson(route);
         check caller->respond(routeJsonArray);
     }
 
@@ -258,7 +281,7 @@ service /api on httpListener {
             check caller->respond(errorResponse);
             return;
         }
-        check caller->respond(routeResult.toJson());
+        check caller->respond(routeToJson(routeResult));
     }
 
     isolated resource function put routes/[string routeId](http:Caller caller, http:Request req) returns error? {
@@ -270,8 +293,8 @@ service /api on httpListener {
             check caller->respond(errorResponse);
             return;
         }
-        check kafkaProducer->send({topic: "route.updated", value: updated.toJson().toJsonString()});
-        json response = {"message": "Route updated successfully", "route": updated.toJson()};
+        check kafkaProducer->send({topic: "route.updated", value: routeToJson(updated).toJsonString()});
+        json response = {"message": "Route updated successfully", "route": routeToJson(updated)};
         check caller->respond(response);
     }
 
@@ -291,14 +314,14 @@ service /api on httpListener {
         json payload = check req.getJsonPayload();
         Trip trip = check payload.cloneWithType();
         Trip created = check repo.createTrip(trip);
-        check kafkaProducer->send({topic: "trip.created", value: created.toJson().toJsonString()});
-        json response = {"message": "Trip created successfully", "trip": created.toJson()};
+        check kafkaProducer->send({topic: "trip.created", value: tripToJson(created).toJsonString()});
+        json response = {"message": "Trip created successfully", "trip": tripToJson(created)};
         check caller->respond(response);
     }
 
     isolated resource function get trips(http:Caller caller, http:Request req) returns error? {
         Trip[] trips = check repo.getAllTrips();
-        json[] tripJsonArray = from Trip trip in trips select trip.toJson();
+        json[] tripJsonArray = from Trip trip in trips select tripToJson(trip);
         check caller->respond(tripJsonArray);
     }
 
@@ -309,7 +332,7 @@ service /api on httpListener {
             check caller->respond(errorResponse);
             return;
         }
-        check caller->respond(tripResult.toJson());
+        check caller->respond(tripToJson(tripResult));
     }
 
     isolated resource function patch trips/[string tripId]/status(http:Caller caller, http:Request req) returns error? {
@@ -321,8 +344,8 @@ service /api on httpListener {
             check caller->respond(errorResponse);
             return;
         }
-        check kafkaProducer->send({topic: "trip.status.updated", value: {"tripId": tripId, "status": statusUpdate.status, "updatedTrip": updated.toJson()}.toJsonString()});
-        json response = {"message": "Trip status updated successfully", "trip": updated.toJson()};
+        check kafkaProducer->send({topic: "trip.status.updated", value: {"tripId": tripId, "status": statusUpdate.status, "updatedTrip": tripToJson(updated)}.toJsonString()});
+        json response = {"message": "Trip status updated successfully", "trip": tripToJson(updated)};
         check caller->respond(response);
     }
 
@@ -330,14 +353,14 @@ service /api on httpListener {
         json payload = check req.getJsonPayload();
         Payment payment = check payload.cloneWithType();
         Payment created = check repo.createPayment(tripId, payment);
-        check kafkaProducer->send({topic: "payment.created", value: created.toJson().toJsonString()});
-        json response = {"message": "Payment created successfully", "payment": created.toJson()};
+        check kafkaProducer->send({topic: "payment.created", value: paymentToJson(created).toJsonString()});
+        json response = {"message": "Payment created successfully", "payment": paymentToJson(created)};
         check caller->respond(response);
     }
 
     isolated resource function get trips/[string tripId]/payments(http:Caller caller, http:Request req) returns error? {
         Payment[] payments = check repo.getTripPayments(tripId);
-        json[] paymentJsonArray = from Payment payment in payments select payment.toJson();
+        json[] paymentJsonArray = from Payment payment in payments select paymentToJson(payment);
         check caller->respond(paymentJsonArray);
     }
 
@@ -350,8 +373,8 @@ service /api on httpListener {
             check caller->respond(errorResponse);
             return;
         }
-        check kafkaProducer->send({topic: "payment.status.updated", value: {"paymentId": paymentId, "status": statusUpdate.status, "updatedPayment": updated.toJson()}.toJsonString()});
-        json response = {"message": "Payment status updated successfully", "payment": updated.toJson()};
+        check kafkaProducer->send({topic: "payment.status.updated", value: {"paymentId": paymentId, "status": statusUpdate.status, "updatedPayment": paymentToJson(updated)}.toJsonString()});
+        json response = {"message": "Payment status updated successfully", "payment": paymentToJson(updated)};
         check caller->respond(response);
     }
 
