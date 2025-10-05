@@ -5,20 +5,20 @@ import ballerinax/kafka;
 
 // MongoDB connection - use Docker service name
 mongodb:Client mongoClient = check new ({
-    connection: "mongodb://root:password@mongo:27017/transport_db"
+    connection: "mongodb://root:password@mongodb:27017/transport_db"
 });
 
 // Kafka Producer - use Docker service name
-kafka:Producer kafkaProducer = check new ("localhost:19092");
+kafka:Producer kafkaProducer = check new ("kafka1:19092");
 
 // Kafka Consumer - listens to multiple topics
-kafka:Consumer kafkaConsumer = check new ("localhost:19092", {
+kafka:Consumer kafkaConsumer = check new ("kafka1:19092", {
     groupId: "passenger-group",
     topics: ["passenger.trip.responses", "ticket.status.updates", "service.disruptions", "notifications"],
     offsetReset: "earliest"
 });
 
-service /passenger on new http:Listener(8081) {
+service /passenger on new http:Listener(8085) {
 
     // REGISTER passenger
     resource function post register(http:Caller caller, http:Request req) returns error? {
