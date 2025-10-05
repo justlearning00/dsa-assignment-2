@@ -1,16 +1,15 @@
-FROM ballerina/ballerina:2201.9.0
+FROM ballerina/ballerina:2201.10.0
 
-# Set workdir to passenger-service
 WORKDIR /home/ballerina/passenger-service
 
-# Copy passenger-service files into container
 COPY . .
 
-# Build the Ballerina project
+# Fix permissions
+RUN chmod -R 777 /home/ballerina/passenger-service
+
+# Build
 RUN bal build
 
-# Expose the port your service runs on
 EXPOSE 8081
 
-# Run the service
-CMD ["bal", "run"]
+CMD ["bal", "run", "passenger_service.bal"]
