@@ -19,17 +19,17 @@ service /notifications on new http:Listener(8085) {
         log:printInfo("Initializing Notification Service...");
 
         // Initialize MongoDB
-        self.mongoClient = check new ({
-            connection: "mongodb://root:password@mongodb:27017/transport_db"
-        });
-
+       self.mongoClient = check new ({
+// Temporarily remove authentication to test
+connection: "mongodb://localhost:27017/transport_db"
+});
         self.transportDb = check self.mongoClient->getDatabase("transport_db");
         self.notificationsCollection = check self.transportDb->getCollection("notifications");
 
         
         
         // Initialize Kafka consumer to listen to admin service events
-        self.kafkaConsumer = check new (kafka:DEFAULT_URL, {
+        self.kafkaConsumer = check new ("localhost:9092", {
             groupId: "notification-consumer-group",
             topics: ["schedule.updates", "service.disruptions"]
         });
@@ -39,7 +39,7 @@ service /notifications on new http:Listener(8085) {
 
     }
 
-    // Process Kafka messages from admin service
+    // Process Kafka messages 
     isolated function processKafkaMessages() returns error? {
         while true {
             kafka:AnydataConsumerRecord[] records = check self.kafkaConsumer->poll(1000);
@@ -134,8 +134,6 @@ json eventData = check message.fromJsonString();
 public function main() returns error? {
     log:printInfo("Starting Notification Service on port 8085...");
 
-    // Start Kafka consumer in background
-    // Note: In production, you'd run this in a separate worker or service
-    // For now, you need to call processKafkaMessages() 
+  
     
 }

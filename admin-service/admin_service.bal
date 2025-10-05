@@ -19,7 +19,7 @@ type ServiceDisruption record {
     time:Utc timestamp;
 };
 
-service /admin on new http:Listener(8086) {
+service /admin on new http:Listener(8089) {
   
     // Service-level fields
     mongodb:Client mongoClient;
@@ -36,8 +36,8 @@ service /admin on new http:Listener(8086) {
         log:printInfo("Initializing Admin Service...");
 
         // Initialize MongoDB client and collections
-       self.mongoClient = check new ({
-    connection: "mongodb://root:password@mongodb:27017/transport_db"
+      self.mongoClient = check new ({
+    connection: "mongodb://localhost:27017/transport_db"
 });
 
         self.transportDb = check self.mongoClient->getDatabase("transport_db");
@@ -47,7 +47,7 @@ service /admin on new http:Listener(8086) {
         self.reportsCollection = check self.transportDb->getCollection("reports");
 
         // Initialize Kafka producer
-        self.kafkaProducer = check new (kafka:DEFAULT_URL);
+        self.kafkaProducer = check new ("localhost:9092");
 
         log:printInfo("Admin Service initialized successfully");
     }
