@@ -28,7 +28,7 @@ service /passenger on new http:Listener(8081) {
 
         // Initialize MongoDB
         self.mongoClient = check new ({
-            connection: "mongodb://root:password@mongodb:27017/transport_db"
+            connection: "mongodb://localhost:27017/transport_db"
         });
 
         self.transportDb = check self.mongoClient->getDatabase("transport_db");
