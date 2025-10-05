@@ -4,12 +4,10 @@ import ballerina/log;
 import ballerina/time;
 import ballerinax/mongodb;
 import ballerinax/kafka;
-import ballerina/lang.'value;
 
 listener http:Listener httpListener = new(8083);
 
 final TicketRepository repo = check getTicketRepository();
-final kafka:Producer kafkaProducer = check new ("kafka1:19092");
 
 type Ticket record {|
     string ticketId;
@@ -51,16 +49,7 @@ type PaymentStatus record {|
     time:Utc timestamp;
 |};
 
-type TicketStatusUpdate record {|
-    string ticketId;
-    string passengerId;
-    string oldStatus;
-    string newStatus;
-    string? validatorId;
-    time:Utc timestamp;
-|};
-
-isolated function toJson(Ticket ticket) returns json {
+function toJson(Ticket ticket) returns json {
     return {
         ticketId: ticket.ticketId,
         passengerId: ticket.passengerId,
@@ -77,23 +66,23 @@ isolated function toJson(Ticket ticket) returns json {
     };
 }
 
-public isolated class TicketRepository {
+public class TicketRepository {
     private final mongodb:Collection tickets;
 
-    public isolated function init(mongodb:Collection tickets) {
+    public function init(mongodb:Collection tickets) {
         self.tickets = tickets;
     }
 
-    private isolated function createUpdate(string operator, map<json> updateData) returns mongodb:Update {
+    private function createUpdate(string operator, map<json> updateData) returns mongodb:Update {
         return {[operator]: updateData};
     }
 
-    public isolated function createTicket(Ticket ticket) returns Ticket|error {
+    public function createTicket(Ticket ticket) returns Ticket|error {
         check self.tickets->insertOne(ticket);
         return ticket;
     }
 
-    public isolated function getTicket(string ticketId) returns Ticket|error {
+    public function getTicket(string ticketId) returns Ticket|error {
         Ticket? result = check self.tickets->findOne({ticketId: ticketId});
         if result is () {
             return error("TICKET_NOT_FOUND");
@@ -101,7 +90,7 @@ public isolated class TicketRepository {
         return result;
     }
 
-    public isolated function getPassengerTickets(string passengerId) returns Ticket[]|error {
+    public function getPassengerTickets(string passengerId) returns Ticket[]|error {
         stream<Ticket, error?> resultStream = check self.tickets->find({passengerId: passengerId});
         Ticket[] tickets = [];
         record {| Ticket value; |}|error? next = resultStream.next();
@@ -113,7 +102,7 @@ public isolated class TicketRepository {
         return tickets;
     }
 
-    public isolated function updateTicketStatus(string ticketId, string status, string? validatorId, string? paymentId) returns Ticket|error {
+    public function updateTicketStatus(string ticketId, string status, string? validatorId, string? paymentId) returns Ticket|error {
         map<json> updateData = {status: status};
         
         if validatorId is string {
@@ -137,7 +126,7 @@ public isolated class TicketRepository {
     }
 }
 
-isolated function getTicketRepository() returns TicketRepository|error {
+function getTicketRepository() returns TicketRepository|error {
     mongodb:Client mongoClient = check new ({
         connection: "mongodb://root:password@mongodb:27017/ticketing_db"
     });
@@ -149,93 +138,59 @@ isolated function getTicketRepository() returns TicketRepository|error {
 
 function generateTicketId() returns string {
     time:Utc now = time:utcNow();
-    return "TKT-" + now[0].toString() + now[1].toString() + now[2].toString();
+    string nowStr = now.toString();
+    return "TKT-" + nowStr.substring(0, 19);
 }
 
 function calculateExpiry(string ticketType) returns time:Utc {
     time:Utc now = time:utcNow();
+    
     match ticketType {
         "SINGLE" => {
-            return now.addHours(2);
+            return time:utcAddSeconds(now, 7200);
         }
         "DAY_PASS" => {
-            return now.addHours(24);
+            return time:utcAddSeconds(now, 86400);
         }
         "WEEK_PASS" => {
-            return now.addHours(7 * 24);
+            return time:utcAddSeconds(now, 604800);
         }
         _ => {
-            return now.addHours(24);
-        }
-    }
-}
-
-// Kafka Consumer for payment status updates
-kafka:Consumer kafkaConsumer = check new ("kafka1:19092", {
-    groupId: "ticketing-group",
-    topics: ["payment.status"]
-});
-
-service kafka:Service on kafkaConsumer {
-    isolated remote function onConsumerRecord(kafka:ConsumerRecord[] records) returns error? {
-        foreach var kafkaRecord in records {
-            PaymentStatus paymentStatus = check value:fromJson(kafkaRecord.value);
-            log:printInfo("Received payment status for ticket: " + paymentStatus.ticketId + " - " + paymentStatus.status);
-            
-            if paymentStatus.status == "SUCCESS" {
-                Ticket|error updated = repo.updateTicketStatus(
-                    paymentStatus.ticketId, 
-                    "PAID", 
-                    (), 
-                    paymentStatus.paymentId
-                );
-                
-                if updated is error {
-                    log:printError("Failed to update ticket status: " + updated.message());
-                } else {
-                    // Send ticket purchased event
-                    check kafkaProducer->send({
-                        topic: "ticket.purchased", 
-                        value: {
-                            ticketId: paymentStatus.ticketId,
-                            passengerId: paymentStatus.passengerId,
-                            status: "PURCHASED",
-                            timestamp: time:utcNow().toString()
-                        }
-                    });
-                    
-                    log:printInfo("Ticket status updated to PAID: " + paymentStatus.ticketId);
-                }
-            } else {
-                // Payment failed - cancel ticket
-                _ = repo.updateTicketStatus(paymentStatus.ticketId, "CANCELLED", (), ());
-                log:printInfo("Ticket cancelled due to payment failure: " + paymentStatus.ticketId);
-            }
+            return time:utcAddSeconds(now, 86400);
         }
     }
 }
 
 service /tickets on httpListener {
-    isolated resource function post create(http:Caller caller, http:Request req) returns error? {
+    
+    kafka:Producer kafkaProducer;
+    
+    function init() returns error? {
+        self.kafkaProducer = check new ("localhost:9092");
+        log:printInfo("Ticketing Service initialized with Kafka producer");
+    }
+    
+    resource function post create(http:Caller caller, http:Request req) returns error? {
         json payload = check req.getJsonPayload();
-        string passengerId = check payload.passengerId.toString();
-        string tripId = check payload.tripId.toString();
-        string ticketType = check payload.ticketType.toString();
-        decimal amount = <decimal>check payload.amount;
+        TicketRequest request = check payload.cloneWithType();
         
         string ticketId = generateTicketId();
-        time:Utc expiresAt = calculateExpiry(ticketType);
+        time:Utc expiresAt = calculateExpiry(request.ticketType);
         time:Utc createdAt = time:utcNow();
         
         Ticket ticket = {
             ticketId: ticketId,
-            passengerId: passengerId,
-            tripId: tripId,
-            ticketType: ticketType,
-            amount: amount,
+            passengerId: request.passengerId,
+            tripId: request.tripId,
+            ticketType: request.ticketType,
+            amount: request.amount,
             status: "CREATED",
             createdAt: createdAt,
-            expiresAt: expiresAt
+            expiresAt: expiresAt,
+            paidAt: (),
+            validatedAt: (),
+            validatorId: (),
+            paymentId: ()
         };
         
         Ticket created = check repo.createTicket(ticket);
@@ -243,18 +198,19 @@ service /tickets on httpListener {
         // Send payment request to Kafka
         PaymentRequest paymentReq = {
             ticketId: ticketId,
-            passengerId: passengerId,
-            tripId: tripId,
-            ticketType: ticketType,
-            amount: amount,
+            passengerId: request.passengerId,
+            tripId: request.tripId,
+            ticketType: request.ticketType,
+            amount: request.amount,
             timestamp: createdAt
         };
-        check kafkaProducer->send({
+        check self.kafkaProducer->send({
             topic: "payment.requests", 
             value: paymentReq
         });
         
         log:printInfo("Ticket created and payment requested: " + ticketId);
+        
         json response = {
             ticketId: ticketId,
             status: "CREATED",
@@ -263,9 +219,49 @@ service /tickets on httpListener {
         check caller->respond(response);
     }
 
-    isolated resource function post validate/[string ticketId](http:Caller caller, http:Request req) returns error? {
+    resource function post payment/[string ticketId]/status(http:Caller caller, http:Request req) returns error? {
         json payload = check req.getJsonPayload();
-        string validatorId = check payload.validatorId.toString();
+        PaymentStatus paymentStatus = check payload.cloneWithType();
+        
+        log:printInfo("Manual payment status update for ticket: " + ticketId + " - " + paymentStatus.status);
+        
+        if paymentStatus.status == "SUCCESS" {
+            Ticket|error updated = repo.updateTicketStatus(ticketId, "PAID", (), paymentStatus.paymentId);
+            
+            if updated is error {
+                json errorResponse = {"error": "Failed to update ticket status: " + updated.message()};
+                check caller->respond(errorResponse);
+                return;
+            } else {
+                json purchaseEvent = {
+                    ticketId: ticketId,
+                    passengerId: paymentStatus.passengerId,
+                    status: "PURCHASED",
+                    timestamp: time:utcNow().toString()
+                };
+                check self.kafkaProducer->send({
+                    topic: "ticket.purchased", 
+                    value: purchaseEvent
+                });
+                
+                json response = {"status": "PAID", "message": "Ticket payment confirmed"};
+                check caller->respond(response);
+            }
+        } else {
+            Ticket|error cancelResult = repo.updateTicketStatus(ticketId, "CANCELLED", (), ());
+            if cancelResult is error {
+                json errorResponse = {"error": "Failed to cancel ticket: " + cancelResult.message()};
+                check caller->respond(errorResponse);
+            } else {
+                json response = {"status": "CANCELLED", "message": "Ticket cancelled due to payment failure"};
+                check caller->respond(response);
+            }
+        }
+    }
+
+    resource function post validate/[string ticketId](http:Caller caller, http:Request req) returns error? {
+        json payload = check req.getJsonPayload();
+        string validatorId = check payload.validatorId;
         
         Ticket|error ticketResult = repo.getTicket(ticketId);
         if ticketResult is error {
@@ -282,10 +278,17 @@ service /tickets on httpListener {
             return;
         }
         
-        // ==== FIXED EXPIRATION CHECK ====
-        // Check if ticket expired - CORRECT LOGIC
-        if time:utcDiff(ticket.expiresAt, time:utcNow()).seconds < 0 {
-            _ = repo.updateTicketStatus(ticketId, "EXPIRED", (), ());
+        
+        // Check if ticket expired
+        time:Utc now = time:utcNow();
+        string nowStr = now.toString();
+        string expiresStr = ticket.expiresAt.toString();
+        
+        if nowStr > expiresStr {
+            Ticket|error expireResult = repo.updateTicketStatus(ticketId, "EXPIRED", (), ());
+            if expireResult is error {
+                log:printError("Failed to expire ticket: " + expireResult.message());
+            }
             json errorResponse = {"error": "Ticket has expired"};
             check caller->respond(errorResponse);
             return;
@@ -300,14 +303,15 @@ service /tickets on httpListener {
         }
         
         // Send ticket validated event
-        check kafkaProducer->send({
+        json validationEvent = {
+            ticketId: ticketId,
+            passengerId: ticket.passengerId,
+            validatorId: validatorId,
+            timestamp: time:utcNow().toString()
+        };
+        check self.kafkaProducer->send({
             topic: "ticket.validated", 
-            value: {
-                ticketId: ticketId,
-                passengerId: ticket.passengerId,
-                validatorId: validatorId,
-                timestamp: time:utcNow().toString()
-            }
+            value: validationEvent
         });
         
         log:printInfo("Ticket validated: " + ticketId);
@@ -315,7 +319,7 @@ service /tickets on httpListener {
         check caller->respond(response);
     }
 
-    isolated resource function get [string ticketId](http:Caller caller) returns error? {
+    resource function get [string ticketId](http:Caller caller) returns error? {
         Ticket|error ticketResult = repo.getTicket(ticketId);
         if ticketResult is error {
             json errorResponse = {"error": "Ticket not found", "ticketId": ticketId};
@@ -325,7 +329,7 @@ service /tickets on httpListener {
         check caller->respond(toJson(ticketResult));
     }
 
-    isolated resource function get passenger/[string passengerId](http:Caller caller) returns error? {
+    resource function get passenger/[string passengerId](http:Caller caller) returns error? {
         Ticket[]|error ticketsResult = repo.getPassengerTickets(passengerId);
         if ticketsResult is error {
             json errorResponse = {"error": "Failed to fetch tickets", "passengerId": passengerId};
@@ -339,7 +343,7 @@ service /tickets on httpListener {
         check caller->respond(ticketJsonArray);
     }
 
-    isolated resource function get health() returns json {
+    resource function get health() returns json {
         return {"status": "healthy", "service": "Ticketing Service", "timestamp": time:utcNow().toString()};
     }
 }

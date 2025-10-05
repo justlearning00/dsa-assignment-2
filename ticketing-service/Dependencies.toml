@@ -370,7 +370,7 @@ modules = [
 
 [[package]]
 org = "clxver"
-name = "admin_service"
+name = "ticketing_service"
 version = "0.1.0"
 dependencies = [
 	{org = "ballerina", name = "http"},
@@ -381,6 +381,6 @@ dependencies = [
 	{org = "ballerinax", name = "mongodb"}
 ]
 modules = [
-	{org = "clxver", packageName = "admin_service", moduleName = "admin_service"}
+	{org = "clxver", packageName = "ticketing_service", moduleName = "ticketing_service"}
 ]
 
