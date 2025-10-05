@@ -74,7 +74,7 @@ log:printInfo("Inserted route into MongoDB: " + routeData.toJsonString());
 
         check caller->respond({status: "Route created", id: routeId});
     }
-
+//get routes
     isolated  resource function get routes(http:Caller caller, http:Request req) returns error? {
         log:printInfo("GET /admin/routes - Fetching all routes");
     

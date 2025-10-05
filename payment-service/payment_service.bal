@@ -131,10 +131,10 @@ public class PaymentRepository {
 
 function getPaymentRepository() returns PaymentRepository|error {
     mongodb:Client mongoClient = check new ({
-        connection: "mongodb://root:password@mongodb:27017/payment_db"
+        connection: "mongodb://localhost:27017/transport"
     });
     
-    mongodb:Database database = check mongoClient->getDatabase("payment_db");
+    mongodb:Database database = check mongoClient->getDatabase("transport_db");
     mongodb:Collection payments = check database->getCollection("payments");
     return new(payments);
 }
