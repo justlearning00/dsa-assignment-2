@@ -28,7 +28,7 @@ service /passenger on new http:Listener(8081) {
 
         // Initialize MongoDB
         self.mongoClient = check new ({
-            connection: "mongodb://root:password@mongodb:27017/transport_db"
+            connection: "mongodb://localhost:27017/transport_db"
         });
 
         self.transportDb = check self.mongoClient->getDatabase("transport_db");
@@ -36,8 +36,8 @@ service /passenger on new http:Listener(8081) {
         self.ticketsCollection = check self.transportDb->getCollection("tickets");
 
         // Initialize Kafka
-        self.kafkaProducer = check new ("kafka1:19092");
-        self.kafkaConsumer = check new ("kafka1:19092", {
+        self.kafkaProducer = check new ("localhost:9092");
+        self.kafkaConsumer = check new ("localhost:9092", {
             groupId: "passenger-group",
             topics: ["passenger.trip.responses", "ticket.status.updates", "service.disruptions", "notifications"],
             offsetReset: "earliest"
@@ -59,22 +59,35 @@ service /passenger on new http:Listener(8081) {
     }
 
     // LOGIN passenger
-    isolated resource function post login(http:Caller caller, http:Request req) returns error? {
-        log:printInfo("POST /passenger/login - Login attempt");
-        json payload = check req.getJsonPayload();
-        
-        string username = (check payload.username).toString();
-        string password = (check payload.password).toString();
+  isolated resource function post login(http:Caller caller, http:Request req) returns error? {
+    log:printInfo("POST /passenger/login - Login attempt");
+    json payload = check req.getJsonPayload();
+    
+    string username = (check payload.username).toString();
+    string password = (check payload.password).toString();
 
-        stream<map<json>, error?> resultStream = check self.usersCollection->find({username: username, password: password});
-        map<json>[] users = check from map<json> user in resultStream select user;
+    // Use projection and same pattern as admin routes
+    map<json> projection = {
+        userId: 1,
+        username: 1,
+        name: 1,
+        email: 1,
+        phone: 1,
+        balance: 1
+    };
 
-        if users.length() > 0 {
-            check caller->respond({status: "Login successful", user: users[0]});
-        } else {
-            check caller->respond({status: "Invalid credentials"});
-        }
+    stream<map<json>, error?> resultStream = check self.usersCollection->find(
+        {username: username, password: password}, {}, projection
+    );
+    map<json>[] users = check from map<json> user in resultStream select user;
+
+    if users.length() > 0 {
+        check caller->respond({status: "Login successful", user: users[0]});
+    } else {
+        check caller->respond({status: "Invalid credentials"});
     }
+}
+
 
     // UPDATE account
     isolated resource function put account/[string userId](http:Caller caller, http:Request req) returns error? {
@@ -94,14 +107,28 @@ service /passenger on new http:Listener(8081) {
     }
 
     // VIEW tickets
-    isolated resource function get tickets/[string userId](http:Caller caller, http:Request req) returns error? {
-        log:printInfo("GET /passenger/tickets/" + userId + " - Fetching tickets");
-        
-        stream<map<json>, error?> resultStream = check self.ticketsCollection->find({userId: userId});
-        map<json>[] tickets = check from map<json> ticket in resultStream select ticket;
-        
-        check caller->respond(tickets);
-    }
+   
+isolated resource function get tickets/[string userId](http:Caller caller, http:Request req) returns error? {
+    log:printInfo("GET /passenger/tickets/" + userId + " - Fetching tickets");
+    
+    map<json> projection = {
+        ticketId: 1,
+        userId: 1,
+        routeId: 1,
+        tripId: 1,
+        status: 1,
+        purchaseDate: 1,
+        expiryDate: 1,
+        fare: 1
+    };
+
+    stream<map<json>, error?> resultStream = check self.ticketsCollection->find(
+        {userId: userId}, {}, projection
+    );
+    map<json>[] tickets = check from map<json> ticket in resultStream select ticket;
+    
+    check caller->respond(tickets);
+}
 
     // REQUEST TRIP - publishes to passenger.trip.requests
     isolated resource function post tripRequest(http:Caller caller, http:Request req) returns error? {
@@ -157,6 +184,7 @@ service /passenger on new http:Listener(8081) {
             check caller->respond({status: "NO_UPDATES", message: "No new messages"});
         }
     }
+    
 
     // LISTEN for trip responses
     isolated resource function get tripResponses(http:Caller caller, http:Request req) returns error? {

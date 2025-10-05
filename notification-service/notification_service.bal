@@ -31,7 +31,7 @@ connection: "mongodb://localhost:27017/transport_db"
         // Initialize Kafka consumer to listen to admin service events
         self.kafkaConsumer = check new ("localhost:9092", {
             groupId: "notification-consumer-group",
-            topics: ["schedule.updates", "service.disruptions"]
+            topics: ["schedule.updates", "service.disruptions","payment.status","passenger.trip.requests","ticket.requests","payment.requests","ticket.purchased", "ticket.validated"]
         });
 
         log:printInfo("Notification Service initialized successfully");
@@ -79,26 +79,44 @@ json eventData = check message.fromJsonString();
     }
 
     // Get all notifications
-    isolated resource function get all(http:Caller caller, http:Request req) returns error? {
-        log:printInfo("GET /notifications/all - Fetching all notifications");
+resource function get all(http:Caller caller, http:Request req) returns error? {
+    log:printInfo("GET /notifications/all - Fetching all notifications");
+    
+    map<json> projection = {
+        notificationId: 1,
+        userId: 1,
+        message: 1,
+        'type: 1,
+        read: 1,
+        timestamp: 1
+    };
 
-        stream<map<json>, error?> resultStream = check self.notificationsCollection->find();
-        map<json>[] notifications = check from map<json> notif in resultStream select notif;
-        
-        check caller->respond(notifications);
-    }
+    stream<map<json>, error?> resultStream = check self.notificationsCollection->find({}, {}, projection);
+    map<json>[] notifications = check from map<json> notif in resultStream select notif;
 
-    // Get notifications for a user
-    isolated resource function get user/[string userId](http:Caller caller, http:Request req) returns error? {
-        log:printInfo("GET /notifications/user/" + userId);
+    log:printInfo("Fetched notifications: " + notifications.toString());
+    check caller->respond(notifications);
+}
 
-        stream<map<json>, error?> resultStream = check self.notificationsCollection->find(
-            filter = {userId: userId}
-        );
-        map<json>[] notifications = check from map<json> notif in resultStream select notif;
-        
-        check caller->respond(notifications);
-    }
+// Get user notifications
+resource function get user/[string userId](http:Caller caller, http:Request req) returns error? {
+    log:printInfo("GET /notifications/user/" + userId);
+    
+    map<json> projection = {
+        notificationId: 1,
+        userId: 1,
+        message: 1,
+        'type: 1,
+        read: 1,
+        timestamp: 1
+    };
+
+    stream<map<json>, error?> resultStream = check self.notificationsCollection->find({userId: userId}, {}, projection);
+    map<json>[] notifications = check from map<json> notif in resultStream select notif;
+
+    log:printInfo("Fetched user notifications: " + notifications.toString());
+    check caller->respond(notifications);
+}
 
     // Mark notification as read
     isolated resource function put [string notificationId]/read(http:Caller caller, http:Request req) returns error? {
