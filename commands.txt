@@ -40,9 +40,9 @@ docker exec -it kafka1 kafka-console-producer --topic ticket.requests --bootstra
 {"passengerId":"TEST_123","routeId":"BUS_101","tripId":"TRIP_001","ticketType":"SINGLE_RIDE","price":15.50,"paymentMethod":"CASH"}
 
 
-docker exec -it mongodb bash
+docker exec -it mongodb mongosh 
 # then inside container:
-mongosh -u root -p password --authenticationDatabase admin
+
 # in mongosh:
 use transport_db
-db.routes.find().pretty()
+db.your collection.find().pretty()
